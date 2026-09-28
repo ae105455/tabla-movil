@@ -3,6 +3,8 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import 'evaluation_api.dart';
+
 // Punto de entrada de la aplicación Flutter.
 void main() => runApp(const DanceEvaluationApp());
 
@@ -46,9 +48,17 @@ class DanceEvaluationPage extends StatefulWidget {
 }
 
 class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
+  static const _apiEndpoint = String.fromEnvironment(
+    'API_URL',
+    defaultValue: 'http://localhost:8000/api/evaluaciones.php',
+  );
+
+  final _api = EvaluationApi();
   // Controladores para los datos generales del jurado.
   final _juryController = TextEditingController();
   final _dateController = TextEditingController();
+  bool _isLoading = false;
+  bool _isSaving = false;
 
   // Lista de filas que aparecen en la tabla de evaluación.
   final List<_DanceRow> _rows = [_DanceRow()];
@@ -58,6 +68,7 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
     // Libera los controladores cuando la pantalla deja de utilizarse.
     _juryController.dispose();
     _dateController.dispose();
+    _api.close();
     for (final row in _rows) {
       row.dispose();
     }
@@ -66,6 +77,115 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
 
   // Agrega una nueva fila vacía para registrar otro participante.
   void _addRow() => setState(() => _rows.add(_DanceRow()));
+
+  Future<void> _loadRows() async {
+    setState(() => _isLoading = true);
+    try {
+      final records = await _api.getAll(_apiEndpoint);
+      final loadedRows = records.map(_DanceRow.fromJson).toList();
+      setState(() {
+        for (final row in _rows) {
+          row.dispose();
+        }
+        _rows
+          ..clear()
+          ..addAll(loadedRows.isEmpty ? [_DanceRow()] : loadedRows);
+      });
+      _showMessage('Se cargaron ${records.length} evaluaciones.');
+    } catch (error) {
+      _showMessage('No se pudieron cargar las evaluaciones: $error', isError: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveRow(_DanceRow row) async {
+    if (row.participant.text.trim().isEmpty) {
+      _showMessage('Escribe el nombre del participante antes de guardar.', isError: true);
+      return;
+    }
+    final scores = [
+      row.techniqueScore,
+      row.expressionScore,
+      row.choreographyScore,
+      row.costumeScore,
+    ];
+    if (scores.any((score) {
+      final value = int.tryParse(score.text);
+      return value == null || value < 0 || value > 25;
+    })) {
+      _showMessage('Cada calificación debe ser un número entre 0 y 25.', isError: true);
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      if (row.id == null) {
+        row.id = await _api.create(_apiEndpoint, row.toJson());
+        _showMessage('Evaluación guardada en MySQL.');
+      } else {
+        await _api.update(_apiEndpoint, row.id!, row.toJson());
+        _showMessage('Evaluación actualizada en MySQL.');
+      }
+    } catch (error) {
+      _showMessage('No se pudo guardar la evaluación: $error', isError: true);
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _deleteRow(_DanceRow row) async {
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Eliminar evaluación'),
+        content: const Text('¿Deseas eliminar este participante?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDelete != true) return;
+
+    if (row.id != null) {
+      setState(() => _isSaving = true);
+      try {
+        await _api.delete(_apiEndpoint, row.id!);
+      } catch (error) {
+        _showMessage('No se pudo eliminar la evaluación: $error', isError: true);
+        if (mounted) setState(() => _isSaving = false);
+        return;
+      }
+      if (mounted) setState(() => _isSaving = false);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      row.dispose();
+      _rows.remove(row);
+      if (_rows.isEmpty) _rows.add(_DanceRow());
+    });
+    _showMessage('Evaluación eliminada.');
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Theme.of(context).colorScheme.error : null,
+        ),
+      );
+  }
 
   // Construye el PDF y abre la opción de descargarlo o compartirlo.
   Future<void> _generateForm() async {
@@ -153,6 +273,21 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
                   const SizedBox(height: 4),
                   const Text('Registra la presentación y califica cada criterio sobre 25 puntos.'),
                   const SizedBox(height: 20),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: _isLoading ? null : _loadRows,
+                      icon: _isLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.sync),
+                      label: const Text('Cargar desde MySQL'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   // Botón principal visible antes de la tabla de evaluación.
                   Align(
                     alignment: Alignment.centerLeft,
@@ -183,6 +318,7 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
       'N.º', 'Participante / grupo', 'Soc.', 'Cont.', 'Exp.', 'Inter.', 'Técn.',
       'Creat.', 'Disc.', 'Mat.', 'Turno', 'Título del baile',
       'Técnica\n25', 'Expresión\n25', 'Coreografía\n25', 'Vestuario\n25', 'Total\n100',
+      'Acciones',
     ];
     return Card(
       elevation: 0,
@@ -240,6 +376,21 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
       DataCell(_scoreCell(row.choreographyScore, row)),
       DataCell(_scoreCell(row.costumeScore, row)),
       DataCell(Text('${row.total}', style: const TextStyle(fontWeight: FontWeight.bold))),
+      DataCell(Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: row.id == null ? 'Guardar en MySQL' : 'Actualizar en MySQL',
+            onPressed: _isSaving ? null : () => _saveRow(row),
+            icon: const Icon(Icons.save_outlined),
+          ),
+          IconButton(
+            tooltip: 'Eliminar',
+            onPressed: _isSaving ? null : () => _deleteRow(row),
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      )),
     ]);
   }
 
@@ -298,6 +449,29 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
 /// Guarda la información del participante, los datos de su presentación,
 /// las calificaciones de cada criterio y calcula el total sobre 100 puntos.
 class _DanceRow {
+  int? id;
+
+  _DanceRow();
+
+  _DanceRow.fromJson(Map<String, dynamic> json) {
+    id = int.tryParse('${json['id']}');
+    participant.text = '${json['participant'] ?? ''}';
+    social.text = '${json['social'] ?? ''}';
+    control.text = '${json['control'] ?? ''}';
+    expression.text = '${json['expression'] ?? ''}';
+    interpretation.text = '${json['interpretation'] ?? ''}';
+    technique.text = '${json['technique'] ?? ''}';
+    creativity.text = '${json['creativity'] ?? ''}';
+    discipline.text = '${json['discipline'] ?? ''}';
+    matter.text = '${json['matter'] ?? ''}';
+    shift.text = '${json['shift'] ?? ''}';
+    title.text = '${json['title'] ?? ''}';
+    techniqueScore.text = '${json['technique_score'] ?? 0}';
+    expressionScore.text = '${json['expression_score'] ?? 0}';
+    choreographyScore.text = '${json['choreography_score'] ?? 0}';
+    costumeScore.text = '${json['costume_score'] ?? 0}';
+  }
+
   // Controladores para los datos descriptivos del participante.
   final participant = TextEditingController();
   final social = TextEditingController();
@@ -322,6 +496,24 @@ class _DanceRow {
       .map((controller) => int.tryParse(controller.text) ?? 0)
       .fold(0, (sum, score) => sum + score);
 
+  Map<String, dynamic> toJson() => {
+        'participant': participant.text.trim(),
+        'social': social.text.trim(),
+        'control': control.text.trim(),
+        'expression': expression.text.trim(),
+        'interpretation': interpretation.text.trim(),
+        'technique': technique.text.trim(),
+        'creativity': creativity.text.trim(),
+        'discipline': discipline.text.trim(),
+        'matter': matter.text.trim(),
+        'shift': shift.text.trim(),
+        'title': title.text.trim(),
+        'technique_score': int.tryParse(techniqueScore.text) ?? 0,
+        'expression_score': int.tryParse(expressionScore.text) ?? 0,
+        'choreography_score': int.tryParse(choreographyScore.text) ?? 0,
+        'costume_score': int.tryParse(costumeScore.text) ?? 0,
+      };
+
   void dispose() {
     // Libera todos los controladores pertenecientes a esta fila.
     for (final controller in [
@@ -333,5 +525,3 @@ class _DanceRow {
     }
   }
 }
-// Pendiente de investigación: implementar un CRUD básico con HTTP y MySQL,
-// utilizando los métodos POST, PUT y DELETE.
