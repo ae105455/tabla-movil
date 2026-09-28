@@ -23,7 +23,8 @@ void main() {
         };
       }),
     );
-    const endpoint = 'http://localhost:8000/api/evaluaciones.php';
+    const endpoint =
+      'http://localhost/tabla-movil-main/backend/api/evaluaciones.php';
     const record = {'participant': 'Grupo A'};
 
     try {

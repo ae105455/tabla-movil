@@ -16,6 +16,16 @@ void main() {
     expect(find.text('2'), findsOneWidget);
   });
 
+  testWidgets('muestra el guardado en MySQL y evita enviar filas vacías', (tester) async {
+    await tester.pumpWidget(const DanceEvaluationApp());
+
+    expect(find.text('Guardar en MySQL'), findsOneWidget);
+    await tester.tap(find.text('Guardar en MySQL'));
+    await tester.pump();
+
+    expect(find.text('Escribe el nombre de al menos un participante.'), findsOneWidget);
+  });
+
   testWidgets('calcula el total de los cuatro criterios', (tester) async {
     await tester.pumpWidget(const DanceEvaluationApp());
 
