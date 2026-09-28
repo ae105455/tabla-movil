@@ -31,7 +31,10 @@ class DanceEvaluationApp extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             borderSide: BorderSide.none,
           ),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 10,
+          ),
         ),
       ),
       home: const DanceEvaluationPage(),
@@ -50,7 +53,7 @@ class DanceEvaluationPage extends StatefulWidget {
 class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
   static const _apiEndpoint = String.fromEnvironment(
     'API_URL',
-    defaultValue: 'http://localhost:8000/api/evaluaciones.php',
+    defaultValue: 'http://localhost/tabla-movil/backend/api/evaluaciones.php',
   );
 
   final _api = EvaluationApi();
@@ -93,28 +96,19 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
       });
       _showMessage('Se cargaron ${records.length} evaluaciones.');
     } catch (error) {
-      _showMessage('No se pudieron cargar las evaluaciones: $error', isError: true);
+      _showMessage(
+        'No se pudieron cargar las evaluaciones: $error',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _saveRow(_DanceRow row) async {
-    if (row.participant.text.trim().isEmpty) {
-      _showMessage('Escribe el nombre del participante antes de guardar.', isError: true);
-      return;
-    }
-    final scores = [
-      row.techniqueScore,
-      row.expressionScore,
-      row.choreographyScore,
-      row.costumeScore,
-    ];
-    if (scores.any((score) {
-      final value = int.tryParse(score.text);
-      return value == null || value < 0 || value > 25;
-    })) {
-      _showMessage('Cada calificación debe ser un número entre 0 y 25.', isError: true);
+    final error = _validationError(row);
+    if (error != null) {
+      _showMessage(error, isError: true);
       return;
     }
 
@@ -132,6 +126,69 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  Future<void> _saveAllRows() async {
+    final rowsToSave = _rows.where((row) => row.hasContent).toList();
+    if (rowsToSave.isEmpty) {
+      _showMessage(
+        'Escribe el nombre de al menos un participante.',
+        isError: true,
+      );
+      return;
+    }
+
+    for (final row in rowsToSave) {
+      final error = _validationError(row);
+      if (error != null) {
+        _showMessage('Fila ${_rows.indexOf(row) + 1}: $error', isError: true);
+        return;
+      }
+    }
+
+    setState(() => _isSaving = true);
+    var savedCount = 0;
+    try {
+      for (final row in rowsToSave) {
+        if (row.id == null) {
+          row.id = await _api.create(_apiEndpoint, row.toJson());
+        } else {
+          await _api.update(_apiEndpoint, row.id!, row.toJson());
+        }
+        savedCount++;
+      }
+      _showMessage('Se guardaron $savedCount evaluaciones en MySQL.');
+    } catch (error) {
+      _showMessage(
+        savedCount == 0
+            ? 'No se pudo guardar en MySQL: $error'
+            : 'Se guardaron $savedCount filas; ocurrió un error: $error',
+        isError: true,
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  String? _validationError(_DanceRow row) {
+    if (row.participant.text.trim().isEmpty) {
+      return 'Escribe el nombre del participante antes de guardar.';
+    }
+    final scores = [
+      row.techniqueScore,
+      row.expressionScore,
+      row.choreographyScore,
+      row.costumeScore,
+    ];
+    if (scores.any((score) {
+      final text = score.text.trim();
+      if (text.isEmpty) return false;
+      final value = int.tryParse(text);
+      return value == null || value < 0 || value > 25;
+    })) {
+      return 'Las calificaciones deben ser números entre 0 y 25.';
+    }
+    return null;
   }
 
   Future<void> _deleteRow(_DanceRow row) async {
@@ -159,7 +216,10 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
       try {
         await _api.delete(_apiEndpoint, row.id!);
       } catch (error) {
-        _showMessage('No se pudo eliminar la evaluación: $error', isError: true);
+        _showMessage(
+          'No se pudo eliminar la evaluación: $error',
+          isError: true,
+        );
         if (mounted) setState(() => _isSaving = false);
         return;
       }
@@ -193,9 +253,23 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
 
     // Encabezados que se mostrarán en la tabla del documento PDF.
     const headers = [
-      'N.º', 'Participante / grupo', 'Soc.', 'Cont.', 'Exp.', 'Inter.', 'Tecn.',
-      'Creat.', 'Disc.', 'Mat.', 'Turno', 'Titulo del baile', 'Tecnica',
-      'Expresion', 'Coreografia', 'Vestuario', 'Total',
+      'N.º',
+      'Participante / grupo',
+      'Soc.',
+      'Cont.',
+      'Exp.',
+      'Inter.',
+      'Tecn.',
+      'Creat.',
+      'Disc.',
+      'Mat.',
+      'Turno',
+      'Titulo del baile',
+      'Tecnica',
+      'Expresion',
+      'Coreografia',
+      'Vestuario',
+      'Total',
     ];
 
     // El formato horizontal permite mostrar todas las columnas de la tabla.
@@ -217,23 +291,42 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
               data: List.generate(_rows.length, (index) {
                 final row = _rows[index];
                 return [
-                  '${index + 1}', row.participant.text, row.social.text, row.control.text,
-                  row.expression.text, row.interpretation.text, row.technique.text,
-                  row.creativity.text, row.discipline.text, row.matter.text, row.shift.text,
-                  row.title.text, row.techniqueScore.text, row.expressionScore.text,
-                  row.choreographyScore.text, row.costumeScore.text, '${row.total}',
+                  '${index + 1}',
+                  row.participant.text,
+                  row.social.text,
+                  row.control.text,
+                  row.expression.text,
+                  row.interpretation.text,
+                  row.technique.text,
+                  row.creativity.text,
+                  row.discipline.text,
+                  row.matter.text,
+                  row.shift.text,
+                  row.title.text,
+                  row.techniqueScore.text,
+                  row.expressionScore.text,
+                  row.choreographyScore.text,
+                  row.costumeScore.text,
+                  '${row.total}',
                 ];
               }),
-              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 6),
+              headerStyle: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 6,
+              ),
               cellStyle: const pw.TextStyle(fontSize: 6),
-              headerDecoration: const pw.BoxDecoration(color: PdfColors.teal100),
+              headerDecoration: const pw.BoxDecoration(
+                color: PdfColors.teal100,
+              ),
               cellAlignment: pw.Alignment.center,
               border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
             ),
             pw.SizedBox(height: 20),
             pw.Text('Nombre del jurado: ${_juryController.text}'),
             pw.SizedBox(height: 8),
-            pw.Text('Fecha: ${_dateController.text}     Firma: ______________________________'),
+            pw.Text(
+              'Fecha: ${_dateController.text}     Firma: ______________________________',
+            ),
           ],
         ),
       ),
@@ -266,12 +359,14 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
                   Text(
                     'Formulario de evaluación de baile',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xff174b49),
-                        ),
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xff174b49),
+                    ),
                   ),
                   const SizedBox(height: 4),
-                  const Text('Registra la presentación y califica cada criterio sobre 25 puntos.'),
+                  const Text(
+                    'Registra la presentación y califica cada criterio sobre 25 puntos.',
+                  ),
                   const SizedBox(height: 20),
                   Align(
                     alignment: Alignment.centerLeft,
@@ -285,6 +380,23 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
                             )
                           : const Icon(Icons.sync),
                       label: const Text('Cargar desde MySQL'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.icon(
+                      onPressed: _isSaving ? null : _saveAllRows,
+                      icon: _isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_outlined),
+                      label: Text(
+                        _isSaving ? 'Guardando...' : 'Guardar en MySQL',
+                      ),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -315,9 +427,23 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
   Widget _buildTable() {
     // Títulos de las columnas visibles en la tabla de la aplicación.
     const headers = [
-      'N.º', 'Participante / grupo', 'Soc.', 'Cont.', 'Exp.', 'Inter.', 'Técn.',
-      'Creat.', 'Disc.', 'Mat.', 'Turno', 'Título del baile',
-      'Técnica\n25', 'Expresión\n25', 'Coreografía\n25', 'Vestuario\n25', 'Total\n100',
+      'N.º',
+      'Participante / grupo',
+      'Soc.',
+      'Cont.',
+      'Exp.',
+      'Inter.',
+      'Técn.',
+      'Creat.',
+      'Disc.',
+      'Mat.',
+      'Turno',
+      'Título del baile',
+      'Técnica\n25',
+      'Expresión\n25',
+      'Coreografía\n25',
+      'Vestuario\n25',
+      'Total\n100',
       'Acciones',
     ];
     return Card(
@@ -334,7 +460,11 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
               dataRowMaxHeight: 86,
               columnSpacing: 10,
               columns: headers
-                  .map((header) => DataColumn(label: Text(header, textAlign: TextAlign.center)))
+                  .map(
+                    (header) => DataColumn(
+                      label: Text(header, textAlign: TextAlign.center),
+                    ),
+                  )
                   .toList(),
               rows: List.generate(_rows.length, (index) => _buildRow(index)),
             ),
@@ -358,50 +488,62 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
   // Construye visualmente una fila y conecta sus campos con _DanceRow.
   DataRow _buildRow(int index) {
     final row = _rows[index];
-    return DataRow(cells: [
-      DataCell(Text('${index + 1}')),
-      DataCell(_cell(row.participant, 150)),
-      DataCell(_cell(row.social, 62)),
-      DataCell(_cell(row.control, 62)),
-      DataCell(_cell(row.expression, 62)),
-      DataCell(_cell(row.interpretation, 62)),
-      DataCell(_cell(row.technique, 62)),
-      DataCell(_cell(row.creativity, 62)),
-      DataCell(_cell(row.discipline, 62)),
-      DataCell(_cell(row.matter, 62)),
-      DataCell(_cell(row.shift, 70)),
-      DataCell(_cell(row.title, 150)),
-      DataCell(_scoreCell(row.techniqueScore, row)),
-      DataCell(_scoreCell(row.expressionScore, row)),
-      DataCell(_scoreCell(row.choreographyScore, row)),
-      DataCell(_scoreCell(row.costumeScore, row)),
-      DataCell(Text('${row.total}', style: const TextStyle(fontWeight: FontWeight.bold))),
-      DataCell(Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: row.id == null ? 'Guardar en MySQL' : 'Actualizar en MySQL',
-            onPressed: _isSaving ? null : () => _saveRow(row),
-            icon: const Icon(Icons.save_outlined),
+    return DataRow(
+      cells: [
+        DataCell(Text('${index + 1}')),
+        DataCell(_cell(row.participant, 150)),
+        DataCell(_cell(row.social, 62)),
+        DataCell(_cell(row.control, 62)),
+        DataCell(_cell(row.expression, 62)),
+        DataCell(_cell(row.interpretation, 62)),
+        DataCell(_cell(row.technique, 62)),
+        DataCell(_cell(row.creativity, 62)),
+        DataCell(_cell(row.discipline, 62)),
+        DataCell(_cell(row.matter, 62)),
+        DataCell(_cell(row.shift, 70)),
+        DataCell(_cell(row.title, 150)),
+        DataCell(_scoreCell(row.techniqueScore, row)),
+        DataCell(_scoreCell(row.expressionScore, row)),
+        DataCell(_scoreCell(row.choreographyScore, row)),
+        DataCell(_scoreCell(row.costumeScore, row)),
+        DataCell(
+          Text(
+            '${row.total}',
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-          IconButton(
-            tooltip: 'Eliminar',
-            onPressed: _isSaving ? null : () => _deleteRow(row),
-            icon: const Icon(Icons.delete_outline),
+        ),
+        DataCell(
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: row.id == null
+                    ? 'Guardar en MySQL'
+                    : 'Actualizar en MySQL',
+                onPressed: _isSaving ? null : () => _saveRow(row),
+                icon: const Icon(Icons.save_outlined),
+              ),
+              IconButton(
+                tooltip: 'Eliminar',
+                onPressed: _isSaving ? null : () => _deleteRow(row),
+                icon: const Icon(Icons.delete_outline),
+              ),
+            ],
           ),
-        ],
-      )),
-    ]);
+        ),
+      ],
+    );
   }
 
   // Crea una celda de texto con un ancho fijo para mantener alineada la tabla.
   Widget _cell(TextEditingController controller, double width) => SizedBox(
-        width: width,
-        child: TextField(controller: controller, textAlign: TextAlign.center),
-      );
+    width: width,
+    child: TextField(controller: controller, textAlign: TextAlign.center),
+  );
 
   // Crea una celda numérica y actualiza el total cada vez que cambia la nota.
-  Widget _scoreCell(TextEditingController controller, _DanceRow row) => SizedBox(
+  Widget _scoreCell(TextEditingController controller, _DanceRow row) =>
+      SizedBox(
         width: 72,
         child: TextField(
           controller: controller,
@@ -413,37 +555,40 @@ class _DanceEvaluationPageState extends State<DanceEvaluationPage> {
 
   // Construye la sección donde se escriben los datos del jurado.
   Widget _buildJurySection() => Card(
-        elevation: 0,
-        child: Padding(
-          padding: const EdgeInsets.all(18),
-          child: Wrap(
-            spacing: 20,
-            runSpacing: 14,
-            crossAxisAlignment: WrapCrossAlignment.end,
-            children: [
-              SizedBox(
-                width: 280,
-                child: TextField(
-                  controller: _juryController,
-                  decoration: const InputDecoration(labelText: 'Nombre del jurado'),
-                ),
-              ),
-              SizedBox(
-                width: 200,
-                child: TextField(
-                  controller: _dateController,
-                  decoration: const InputDecoration(labelText: 'Fecha'),
-                ),
-              ),
-              const SizedBox(
-                width: 240,
-                child: TextField(decoration: InputDecoration(labelText: 'Firma del jurado')),
-              ),
-            ],
+    elevation: 0,
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Wrap(
+        spacing: 20,
+        runSpacing: 14,
+        crossAxisAlignment: WrapCrossAlignment.end,
+        children: [
+          SizedBox(
+            width: 280,
+            child: TextField(
+              controller: _juryController,
+              decoration: const InputDecoration(labelText: 'Nombre del jurado'),
+            ),
           ),
-        ),
-      );
+          SizedBox(
+            width: 200,
+            child: TextField(
+              controller: _dateController,
+              decoration: const InputDecoration(labelText: 'Fecha'),
+            ),
+          ),
+          const SizedBox(
+            width: 240,
+            child: TextField(
+              decoration: InputDecoration(labelText: 'Firma del jurado'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
 }
+
 /// Representa una fila de datos de la evaluación de baile.
 ///
 /// Guarda la información del participante, los datos de su presentación,
@@ -491,35 +636,66 @@ class _DanceRow {
   final choreographyScore = TextEditingController();
   final costumeScore = TextEditingController();
 
+  bool get hasContent => [
+    participant,
+    social,
+    control,
+    expression,
+    interpretation,
+    technique,
+    creativity,
+    discipline,
+    matter,
+    shift,
+    title,
+    techniqueScore,
+    expressionScore,
+    choreographyScore,
+    costumeScore,
+  ].any((controller) => controller.text.trim().isNotEmpty);
+
   // Suma las cuatro calificaciones; los campos vacíos cuentan como cero.
-  int get total => [techniqueScore, expressionScore, choreographyScore, costumeScore]
-      .map((controller) => int.tryParse(controller.text) ?? 0)
-      .fold(0, (sum, score) => sum + score);
+  int get total =>
+      [techniqueScore, expressionScore, choreographyScore, costumeScore]
+          .map((controller) => int.tryParse(controller.text) ?? 0)
+          .fold(0, (sum, score) => sum + score);
 
   Map<String, dynamic> toJson() => {
-        'participant': participant.text.trim(),
-        'social': social.text.trim(),
-        'control': control.text.trim(),
-        'expression': expression.text.trim(),
-        'interpretation': interpretation.text.trim(),
-        'technique': technique.text.trim(),
-        'creativity': creativity.text.trim(),
-        'discipline': discipline.text.trim(),
-        'matter': matter.text.trim(),
-        'shift': shift.text.trim(),
-        'title': title.text.trim(),
-        'technique_score': int.tryParse(techniqueScore.text) ?? 0,
-        'expression_score': int.tryParse(expressionScore.text) ?? 0,
-        'choreography_score': int.tryParse(choreographyScore.text) ?? 0,
-        'costume_score': int.tryParse(costumeScore.text) ?? 0,
-      };
+    'participant': participant.text.trim(),
+    'social': social.text.trim(),
+    'control': control.text.trim(),
+    'expression': expression.text.trim(),
+    'interpretation': interpretation.text.trim(),
+    'technique': technique.text.trim(),
+    'creativity': creativity.text.trim(),
+    'discipline': discipline.text.trim(),
+    'matter': matter.text.trim(),
+    'shift': shift.text.trim(),
+    'title': title.text.trim(),
+    'technique_score': int.tryParse(techniqueScore.text) ?? 0,
+    'expression_score': int.tryParse(expressionScore.text) ?? 0,
+    'choreography_score': int.tryParse(choreographyScore.text) ?? 0,
+    'costume_score': int.tryParse(costumeScore.text) ?? 0,
+  };
 
   void dispose() {
     // Libera todos los controladores pertenecientes a esta fila.
     for (final controller in [
-      participant, social, control, expression, interpretation, technique,
-      creativity, discipline, matter, shift, title, techniqueScore,
-      expressionScore, choreographyScore, costumeScore,
+      participant,
+      social,
+      control,
+      expression,
+      interpretation,
+      technique,
+      creativity,
+      discipline,
+      matter,
+      shift,
+      title,
+      techniqueScore,
+      expressionScore,
+      choreographyScore,
+      costumeScore,
     ]) {
       controller.dispose();
     }
